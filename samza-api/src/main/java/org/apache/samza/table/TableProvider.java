@@ -21,6 +21,8 @@ package org.apache.samza.table;
 import java.util.Map;
 
 import org.apache.samza.annotation.InterfaceStability;
+import org.apache.samza.container.SamzaContainerContext;
+import org.apache.samza.task.TaskContext;
 
 
 /**
@@ -54,4 +56,11 @@ public interface TableProvider {
    * Stop the underlying table
    */
   void stop();
+
+  /**
+   * Initialize TableProvider with container and task context
+   * @param containerContext
+   * @param taskContext nullable for global table
+   */
+  void init(SamzaContainerContext containerContext, TaskContext taskContext);
 }
