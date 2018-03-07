@@ -26,10 +26,12 @@ import org.apache.calcite.rel.core.TableScan;
 import org.apache.calcite.rel.logical.LogicalFilter;
 import org.apache.calcite.rel.logical.LogicalJoin;
 import org.apache.calcite.rel.logical.LogicalProject;
+import org.apache.samza.SamzaException;
 import org.apache.samza.operators.KV;
 import org.apache.samza.operators.MessageStream;
 import org.apache.samza.operators.MessageStreamImpl;
 import org.apache.samza.operators.StreamGraph;
+import org.apache.samza.operators.TableDescriptor;
 import org.apache.samza.sql.data.SamzaSqlExecutionContext;
 import org.apache.samza.sql.data.SamzaSqlRelMessage;
 import org.apache.samza.sql.interfaces.SamzaRelConverter;
@@ -38,6 +40,9 @@ import org.apache.samza.sql.interfaces.SqlSystemSourceConfig;
 import org.apache.samza.sql.planner.QueryPlanner;
 import org.apache.samza.sql.runner.SamzaSqlApplicationConfig;
 import org.apache.samza.sql.testutil.SamzaSqlQueryParser;
+import org.apache.samza.table.Table;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 
 /**
@@ -46,6 +51,7 @@ import org.apache.samza.sql.testutil.SamzaSqlQueryParser;
  * It then walks the relational graph and then populates the Samza's {@link StreamGraph} accordingly.
  */
 public class QueryTranslator {
+  private static final Logger LOG = LoggerFactory.getLogger(QueryTranslator.class);
 
   private final ScanTranslator scanTranslator;
   private final SamzaSqlApplicationConfig sqlConfig;
@@ -65,6 +71,7 @@ public class QueryTranslator {
     final TranslatorContext context = new TranslatorContext(streamGraph, relRoot, executionContext);
     final RelNode node = relRoot.project();
     final int[] joinId = new int[1];
+    final SourceResolver sourceResolver = context.getExecutionContext().getSamzaSqlApplicationConfig().getSourceResolver();
 
     node.accept(new RelShuttleImpl() {
       @Override
@@ -92,18 +99,28 @@ public class QueryTranslator {
       public RelNode visit(LogicalJoin join) {
         RelNode node = super.visit(join);
         joinId[0]++;
-        SourceResolver sourceResolver = context.getExecutionContext().getSamzaSqlApplicationConfig().getSourceResolver();
         new JoinTranslator(joinId[0], sourceResolver).translate(join, context);
         return node;
       }
     });
 
-    SqlSystemSourceConfig outputSystemConfig =
-        sqlConfig.getOutputSystemStreamConfigsBySource().get(queryInfo.getOutputSource());
+    String outputSource = queryInfo.getOutputSource();
+    SqlSystemSourceConfig outputSystemConfig = sqlConfig.getOutputSystemStreamConfigsBySource().get(outputSource);
     SamzaRelConverter samzaMsgConverter = sqlConfig.getSamzaRelConverters().get(queryInfo.getOutputSource());
-    MessageStreamImpl<SamzaSqlRelMessage> stream =
-        (MessageStreamImpl<SamzaSqlRelMessage>) context.getMessageStream(node.getId());
+    MessageStreamImpl<SamzaSqlRelMessage> stream = (MessageStreamImpl<SamzaSqlRelMessage>) context.getMessageStream(node.getId());
     MessageStream<KV<Object, Object>> outputStream = stream.map(samzaMsgConverter::convertToSamzaMessage);
-    outputStream.sendTo(streamGraph.getOutputStream(outputSystemConfig.getStreamName()));
+
+    if (!sourceResolver.isTable(outputSource)) {
+      outputStream.sendTo(streamGraph.getOutputStream(outputSystemConfig.getStreamName()));
+    } else {
+      TableDescriptor tableDescriptor = sourceResolver.getTableDescriptor(outputSource);
+      Table outputTable = streamGraph.getTable(tableDescriptor);
+      if (outputTable == null) {
+        String msg = "Failed to obtain table descriptor of " + outputSystemConfig.getSource();
+        LOG.error(msg);
+        throw new SamzaException(msg);
+      }
+      outputStream.sendTo(outputTable);
+    }
   }
 }
