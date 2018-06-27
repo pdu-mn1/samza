@@ -118,7 +118,7 @@ class JobRunner(config: Config) extends Logging {
     }
     coordinatorSystemProducer.stop()
 
-    // Create the actual job, and submit it.
+    // Create the actual job, and throttleAsync it.
     val job = jobFactory.getJob(config)
 
     job.submit()

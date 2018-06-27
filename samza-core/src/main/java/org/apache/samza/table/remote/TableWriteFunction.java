@@ -26,6 +26,7 @@ import org.apache.samza.annotation.InterfaceStability;
 import org.apache.samza.operators.functions.ClosableFunction;
 import org.apache.samza.operators.functions.InitableFunction;
 import org.apache.samza.storage.kv.Entry;
+import org.apache.samza.table.TableOpCallback;
 
 
 /**
@@ -52,6 +53,26 @@ public interface TableWriteFunction<K, V> extends Serializable, InitableFunction
   void put(K key, V record);
 
   /**
+   * Asynchronously store single table {@code record} with specified {@code key}. This method must be thread-safe.
+   *
+   * The key is deleted if record is {@code null}.
+   *
+   * Default implementation delegates to the synchronous method.
+   *
+   * @param key key for the table record
+   * @param record table record to be written
+   * @param callback method to be invoked when the put is done or fails.
+   */
+  default void put(K key, V record, TableOpCallback callback) {
+    try {
+      put(key, record);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
+
+  /**
    * Store the table {@code records} with specified {@code keys}. This method must be thread-safe.
    *
    * A key is deleted if its corresponding record is {@code null}.
@@ -63,10 +84,44 @@ public interface TableWriteFunction<K, V> extends Serializable, InitableFunction
   }
 
   /**
+   * Asynchronously store the table {@code records} with specified {@code keys}. This method must be thread-safe.
+   *
+   * A key is deleted if its corresponding record is {@code null}.
+   *
+   * Default implementation delegates to the synchronous method.
+   *
+   * @param records table records to be written
+   * @param callback method to be invoked when the put is done or fails.
+   */
+  default void putAll(List<Entry<K, V>> records, TableOpCallback callback) {
+    try {
+      putAll(records);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
+
+  /**
    * Delete the {@code record} with specified {@code key} from the remote store
    * @param key key to the table record to be deleted
    */
   void delete(K key);
+
+  /**
+   * Asynchronously delete the {@code record} with specified {@code key} from the remote store
+   * Default implementation delegates to the synchronous method.
+   * @param key key to the table record to be deleted
+   * @param callback method to be invoked when the put is done or fails.
+   */
+  default void delete(K key, TableOpCallback callback) {
+    try {
+      delete(key);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
 
   /**
    * Delete all {@code records} with the specified {@code keys} from the remote store
@@ -74,6 +129,21 @@ public interface TableWriteFunction<K, V> extends Serializable, InitableFunction
    */
   default void deleteAll(Collection<K> keys) {
     keys.stream().forEach(k -> delete(k));
+  }
+
+  /**
+   * Asynchronously delete all {@code records} with the specified {@code keys} from the remote store
+   * Default implementation delegates to the synchronous method.
+   * @param keys keys for the table records to be written
+   * @param callback method to be invoked when the put is done or fails.
+   */
+  default void deleteAll(List<K> keys, TableOpCallback callback) {
+    try {
+      deleteAll(keys);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
   }
 
   /**

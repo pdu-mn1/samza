@@ -68,7 +68,7 @@ object ClientHelper {
 }
 
 /**
- * Client helper class required to submit an application master start script to the resource manager. Also
+ * Client helper class required to throttleAsync an application master start script to the resource manager. Also
  * allows us to forcefully shut-down the application master which in-turn will shut-down the corresponding
  * container and its processes.
  */
@@ -93,7 +93,7 @@ class ClientHelper(conf: Configuration) extends Logging {
   var jobContext: JobContext = null
 
   /**
-   * Generate an application and submit it to the resource manager to start an application master
+   * Generate an application and throttleAsync it to the resource manager to start an application master
    */
   def submitApplication(config: Config, cmds: List[String], env: Option[Map[String, String]], name: Option[String]): Option[ApplicationId] = {
     val app = yarnClient.createApplication

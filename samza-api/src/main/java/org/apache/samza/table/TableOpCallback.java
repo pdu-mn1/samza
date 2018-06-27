@@ -17,27 +17,20 @@
  * under the License.
  */
 
-package org.apache.samza.table.remote;
-
-import java.io.Serializable;
-
-import org.apache.samza.annotation.InterfaceStability;
-
+package org.apache.samza.table;
 
 /**
- * Function interface for providing rate limiting credits for each table record.
- * This interface allows callers to pass in lambda expressions which are otherwise
- * non-serializable as-is.
- * @param <K> the type of the key
- * @param <V> the type of the value
+ * Callback interface for asynchronous table operations.
+ * @param <T> value type of the table
+ * @see {@link ReadableTable}
+ * @see {@link ReadWriteTable}
  */
-@InterfaceStability.Unstable
-public interface CreditFunction<K, V> extends Serializable {
+public interface TableOpCallback<T> {
   /**
-   * Get the number of credits required for the {@code key} and {@code value} pair.
-   * @param key
-   * @param value
-   * @return number of credits
+   * Method to be invoked when the operation returns. Depends on the status
+   * of the operations, {@code result} and {@code error} are set accordingly.
+   * @param result result of read operation; or {@link Void} for write operations
+   * @param error the exception from a failed table operation
    */
-  int getCredits(K key, V value);
+  void onComplete(T result, Throwable error);
 }

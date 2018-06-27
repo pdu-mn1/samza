@@ -175,13 +175,13 @@ public class TestExecutionPlanner {
     OutputStream<KV<Object, Object>> output1 = graphSpec.getOutputStream("output1");
     OutputStream<KV<Object, Object>> output2 = graphSpec.getOutputStream("output2");
 
-    messageStream1.map(m -> m)
-        .filter(m->true)
-        .window(Windows.keyedTumblingWindow(m -> m, Duration.ofMillis(8), mock(Serde.class), mock(Serde.class)), "w1");
-
-    messageStream2.map(m -> m)
-        .filter(m->true)
-        .window(Windows.keyedTumblingWindow(m -> m, Duration.ofMillis(16), mock(Serde.class), mock(Serde.class)), "w2");
+//    messageStream1.map(m -> m)
+//        .filter(m->true)
+//        .window(Windows.keyedTumblingWindow(m -> m, Duration.ofMillis(8), mock(Serde.class), mock(Serde.class)), "w1");
+//
+//    messageStream2.map(m -> m)
+//        .filter(m->true)
+//        .window(Windows.keyedTumblingWindow(m -> m, Duration.ofMillis(16), mock(Serde.class), mock(Serde.class)), "w2");
 
     messageStream1
         .join(messageStream2,

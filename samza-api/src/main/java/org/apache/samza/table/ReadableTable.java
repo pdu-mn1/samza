@@ -55,6 +55,24 @@ public interface ReadableTable<K, V> extends Table<KV<K, V>> {
   V get(K key);
 
   /**
+   * Asynchronously gets the value associated with the specified {@code key}.
+   *
+   * @param key the key with which the associated value is to be fetched.
+   * @param callback method to be invoked when the result is ready or fails.
+   * @throws NullPointerException if the specified {@code key} is {@code null}.
+
+   * @param key
+   * @param callback
+   */
+  default void get(K key, TableOpCallback<V> callback) {
+    try {
+      callback.onComplete(get(key), null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
+
+  /**
    * Gets the values with which the specified {@code keys} are associated.
    *
    * @param keys the keys with which the associated values are to be fetched.
@@ -62,6 +80,21 @@ public interface ReadableTable<K, V> extends Table<KV<K, V>> {
    * @throws NullPointerException if the specified {@code keys} list, or any of the keys, is {@code null}.
    */
   Map<K, V> getAll(List<K> keys);
+
+  /**
+   * Asynchronously gets the values with which the specified {@code keys} are associated.
+   *
+   * @param keys the keys with which the associated values are to be fetched.
+   * @param callback method to be invoked when the results are ready or failures.
+   * @throws NullPointerException if the specified {@code keys} list, or any of the keys, is {@code null}.
+   */
+  default void getAll(List<K> keys, TableOpCallback<Map<K, V>> callback) {
+    try {
+      callback.onComplete(getAll(keys), null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
 
   /**
    * Close the table and release any resources acquired

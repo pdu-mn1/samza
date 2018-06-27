@@ -23,6 +23,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 import org.apache.samza.config.JavaTableConfig;
 import org.apache.samza.container.SamzaContainerContext;
@@ -34,6 +36,10 @@ import org.apache.samza.task.TaskContext;
 import org.apache.samza.util.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+
+import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_READ_TAG;
+import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_WRITE_TAG;
+import static org.apache.samza.table.remote.RequestManager.RetryHelper;
 
 
 /**
@@ -47,6 +53,11 @@ public class RemoteTableProvider implements TableProvider {
   static final String RATE_LIMITER = "io.ratelimiter";
   static final String READ_CREDIT_FN = "io.readCreditFn";
   static final String WRITE_CREDIT_FN = "io.writeCreditFn";
+  static final String MAX_ASYNC_REQUESTS = "io.maxAsyncRequests";
+  static final String RETRY_MAX_COUNT = "retry.maxCount";
+  static final String RETRY_BACKOFF_MULTIPLIER = "retry.backoffMultiplier";
+  static final String RETRY_INIT_BACKOFF_MS = "retry.initialBackoffMs";
+  static final String RETRY_MAX_BACKOFF_MS = "retry.maxBackoffMs";
 
   private final TableSpec tableSpec;
   private final boolean readOnly;
@@ -54,9 +65,13 @@ public class RemoteTableProvider implements TableProvider {
   private SamzaContainerContext containerContext;
   private TaskContext taskContext;
 
+  // Shared scheduled executor for request managers
+  private final ScheduledExecutorService schedExecutor;
+
   public RemoteTableProvider(TableSpec tableSpec) {
     this.tableSpec = tableSpec;
-    readOnly = !tableSpec.getConfig().containsKey(WRITE_FN);
+    this.readOnly = !tableSpec.getConfig().containsKey(WRITE_FN);
+    this.schedExecutor = Executors.newSingleThreadScheduledExecutor();
   }
 
   /**
@@ -80,12 +95,19 @@ public class RemoteTableProvider implements TableProvider {
       rateLimiter.init(containerContext.config, taskContext);
     }
     CreditFunction<?, ?> readCreditFn = deserializeObject(READ_CREDIT_FN);
+    Throttler readThrottler = new Throttler(tableSpec.getId(), rateLimiter, readCreditFn, RL_READ_TAG);
+
+    int maxAsyncRequests = Integer.parseInt(tableSpec.getConfig().get(MAX_ASYNC_REQUESTS));
+    RequestManager requestManager = new RequestManager(tableSpec.getId(), maxAsyncRequests, createRetryHelper());
+
     if (readOnly) {
-      table = new RemoteReadableTable(tableSpec.getId(), readFn, rateLimiter, readCreditFn);
+      table = new RemoteReadableTable(tableSpec.getId(), readFn, readThrottler, requestManager);
     } else {
       CreditFunction<?, ?> writeCreditFn = deserializeObject(WRITE_CREDIT_FN);
-      table = new RemoteReadWriteTable(tableSpec.getId(), readFn, getWriteFn(), rateLimiter, readCreditFn, writeCreditFn);
+      Throttler writeThrottler = new Throttler(tableSpec.getId(), rateLimiter, writeCreditFn, RL_WRITE_TAG);
+      table = new RemoteReadWriteTable(tableSpec.getId(), readFn, getWriteFn(), readThrottler, writeThrottler, requestManager);
     }
+
     table.init(containerContext, taskContext);
     tables.add(table);
     return table;
@@ -139,6 +161,14 @@ public class RemoteTableProvider implements TableProvider {
       writeFn.init(containerContext.config, taskContext);
     }
     return writeFn;
+  }
+
+  private RetryHelper createRetryHelper() {
+    int maxRetryCount = Integer.parseInt(tableSpec.getConfig().get(RETRY_MAX_COUNT));
+    double backoffMultiplier = Double.parseDouble(tableSpec.getConfig().get(RETRY_BACKOFF_MULTIPLIER));
+    long initialBackoffMs = Long.parseLong(tableSpec.getConfig().get(RETRY_INIT_BACKOFF_MS));
+    long maxBackoffMs = Long.parseLong(tableSpec.getConfig().get(RETRY_MAX_BACKOFF_MS));
+    return new RetryHelper(maxRetryCount, backoffMultiplier, initialBackoffMs, maxBackoffMs);
   }
 }
 

@@ -53,7 +53,7 @@ public class ThrottlingScheduler implements Throttleable {
   }
 
   /**
-   * This method may be used to throttle asynchronous processing by delaying the work completion callback.
+   * This method may be used to throttleKeys asynchronous processing by delaying the work completion callback.
    * <p>
    * Executes the given completion callback on the current thread. If throttling is enabled (the work factor
    * is less than 1.0) this method may optionally schedule the callback with a delay to satisfy the

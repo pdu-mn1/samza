@@ -26,6 +26,7 @@ import org.apache.samza.operators.BaseTableDescriptor;
 import org.apache.samza.table.TableSpec;
 import org.apache.samza.table.utils.SerdeUtils;
 import org.apache.samza.util.EmbeddedTaggedRateLimiter;
+import org.apache.samza.util.ExponentialSleepStrategy;
 import org.apache.samza.util.RateLimiter;
 
 import com.google.common.base.Preconditions;
@@ -69,6 +70,16 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
   private CreditFunction<K, V> readCreditFn;
   private CreditFunction<K, V> writeCreditFn;
 
+  private int maxAsyncRequests = 1000;
+
+  private int maxRetryCount = 10;
+
+  private double retryBackoffMultiplier = 2.0;
+
+  private long initialRetryBackoffMs = 100; // 100ms
+
+  private long maxRetryBackoffMs = 60000; // 1 minute
+
   /**
    * Construct a table descriptor instance
    * @param tableId Id of the table
@@ -111,6 +122,14 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
           "write credit function", writeCreditFn));
     }
 
+    tableSpecConfig.put(RemoteTableProvider.MAX_ASYNC_REQUESTS, String.valueOf(maxAsyncRequests));
+
+    // Retry policy
+    tableSpecConfig.put(RemoteTableProvider.RETRY_MAX_COUNT, String.valueOf(maxRetryCount));
+    tableSpecConfig.put(RemoteTableProvider.RETRY_BACKOFF_MULTIPLIER, String.valueOf(retryBackoffMultiplier));
+    tableSpecConfig.put(RemoteTableProvider.RETRY_INIT_BACKOFF_MS, String.valueOf(initialRetryBackoffMs));
+    tableSpecConfig.put(RemoteTableProvider.RETRY_MAX_BACKOFF_MS, String.valueOf(maxRetryBackoffMs));
+
     return new TableSpec(tableId, serde, RemoteTableProviderFactory.class.getName(), tableSpecConfig);
   }
 
@@ -139,7 +158,7 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
   /**
    * Specify a rate limiter along with credit functions to map a table record (as KV) to the amount
    * of credits to be charged from the rate limiter for table read and write operations.
-   * This is an advanced API that provides greater flexibility to throttle each record in the table
+   * This is an advanced API that provides greater flexibility to throttleKeys each record in the table
    * with different number of credits. For most common use-cases eg: limit the number of read/write
    * operations, please instead use the {@link RemoteTableDescriptor#withReadRateLimit(int)} and
    * {@link RemoteTableDescriptor#withWriteRateLimit(int)}.
@@ -184,11 +203,70 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
     return this;
   }
 
+  /**
+   * Specify the maximum number of pending async requests queued up due to rate limiting.
+   * When this limit is hit, further async operations will be blocked for back pressure
+   * until some existing async requests are dispatched after credits replenishment.
+   * @param maxRequests max number of async requests submitted but yet dispatched due to throttling
+   * @return this table descriptor instance
+   */
+  public RemoteTableDescriptor<K, V> withMaxAsyncRequests(int maxRequests) {
+    Preconditions.checkArgument(maxRequests > 0, "Max async requests must be a positive number.");
+    this.maxAsyncRequests = maxRequests;
+    return this;
+  }
+
+  /**
+   * Specify the maximum number of retry attempts allowed per failed table request. Default is 10.
+   * @param maxRetryCount number of retries allowed
+   * @return this table descriptor instance
+   */
+  public RemoteTableDescriptor<K, V> withMaxRetryCount(int maxRetryCount) {
+    Preconditions.checkArgument(maxRetryCount > 0, "Max retry count must be a positve number.");
+    this.maxRetryCount = maxRetryCount;
+    return this;
+  }
+
+  /**
+   * Specify the multiplier for exponential backoff of retry attempts for failed table request. Default is 2.0.
+   * @param retryBackoffMultiplier multiplier for exponential backoff
+   * @return this table descriptor instance
+   */
+  public RemoteTableDescriptor<K, V> withRetryBackoffMultiplier(double retryBackoffMultiplier) {
+    Preconditions.checkArgument(retryBackoffMultiplier > 1.0, "Retry backoff multiplier must be no less than 1.0.");
+    this.retryBackoffMultiplier = retryBackoffMultiplier;
+    return this;
+  }
+
+  /**
+   * Specify the initial backoff time for the first failure of a table request. Default is 100ms.
+   * @param initialRetryBackoffMs initial backoff time in milliseconds
+   * @return this table descriptor instance
+   */
+  public RemoteTableDescriptor<K, V> withInitialRetryBackoffMs(long initialRetryBackoffMs) {
+    Preconditions.checkArgument(initialRetryBackoffMs > 0, "Initial retry backoff must be a non-negative number.");
+    this.initialRetryBackoffMs = initialRetryBackoffMs;
+    return this;
+  }
+
+  /**
+   * Specify the maximum backoff time for a failed table request. Default is 1 minute.
+   * @param maxRetryBackoffMs maximum backoff time in milliseconds
+   * @return
+   */
+  public RemoteTableDescriptor<K, V> withMaxRetryBackoffMs(long maxRetryBackoffMs) {
+    Preconditions.checkArgument(maxRetryBackoffMs > 0, "Max retry backoff must be a non-negative number.");
+    this.maxRetryBackoffMs = maxRetryBackoffMs;
+    return this;
+  }
+
   @Override
   protected void validate() {
     super.validate();
     Preconditions.checkNotNull(readFn, "TableReadFunction is required.");
     Preconditions.checkArgument(rateLimiter == null || tagCreditsMap.isEmpty(),
         "Only one of rateLimiter instance or read/write limits can be specified");
+    Preconditions.checkArgument(maxRetryBackoffMs > initialRetryBackoffMs,
+        "Max backoffMs must be greater than initial backoffMs");
   }
 }

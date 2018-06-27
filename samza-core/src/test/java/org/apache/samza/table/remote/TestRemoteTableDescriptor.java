@@ -28,7 +28,6 @@ import org.apache.samza.container.TaskName;
 import org.apache.samza.metrics.Counter;
 import org.apache.samza.metrics.MetricsRegistry;
 import org.apache.samza.metrics.Timer;
-import org.apache.samza.operators.KV;
 import org.apache.samza.table.Table;
 import org.apache.samza.table.TableSpec;
 import org.apache.samza.task.TaskContext;
@@ -39,7 +38,7 @@ import org.junit.Test;
 
 import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_READ_TAG;
 import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_WRITE_TAG;
-import static org.mockito.Matchers.anyMap;
+import static org.mockito.Matchers.any;
 import static org.mockito.Matchers.anyString;
 import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.mock;
@@ -79,17 +78,17 @@ public class TestRemoteTableDescriptor {
 
   @Test
   public void testSerializeWithLimiterAndReadCredFn() {
-    doTestSerialize(mock(RateLimiter.class), kv -> 1, null);
+    doTestSerialize(mock(RateLimiter.class), (k, v) -> 1, null);
   }
 
   @Test
   public void testSerializeWithLimiterAndWriteCredFn() {
-    doTestSerialize(mock(RateLimiter.class), null, kv -> 1);
+    doTestSerialize(mock(RateLimiter.class), null, (k, v) -> 1);
   }
 
   @Test
   public void testSerializeWithLimiterAndReadWriteCredFns() {
-    doTestSerialize(mock(RateLimiter.class), kv -> 1, kv -> 1);
+    doTestSerialize(mock(RateLimiter.class), (key, value) -> 1, (key, value) -> 1);
   }
 
   @Test
@@ -132,7 +131,7 @@ public class TestRemoteTableDescriptor {
   static class CountingCreditFunction<K, V> implements CreditFunction<K, V> {
     int numCalls = 0;
     @Override
-    public Integer apply(KV<K, V> kv) {
+    public int getCredits(K key, V value) {
       numCalls++;
       return 1;
     }
@@ -143,6 +142,12 @@ public class TestRemoteTableDescriptor {
     RemoteTableDescriptor<String, String> desc = new RemoteTableDescriptor("1");
     desc.withReadFunction(mock(TableReadFunction.class));
     desc.withWriteFunction(mock(TableWriteFunction.class));
+    desc.withMaxAsyncRequests(1000);
+    desc.withMaxRetryCount(123);
+    desc.withRetryBackoffMultiplier(5.0);
+    desc.withInitialRetryBackoffMs(300);
+    desc.withMaxRetryBackoffMs(50000);
+
     if (rateOnly) {
       if (rlGets) {
         desc.withReadRateLimit(1000);
@@ -172,11 +177,14 @@ public class TestRemoteTableDescriptor {
     Table table = provider.getTable();
     Assert.assertTrue(table instanceof RemoteReadWriteTable);
     RemoteReadWriteTable rwTable = (RemoteReadWriteTable) table;
-    Assert.assertNotNull(rwTable.readFn);
-    Assert.assertNotNull(rwTable.writeFn);
     if (numRateLimitOps > 0) {
-      Assert.assertNotNull(rwTable.rateLimiter);
+      Assert.assertTrue(!rlGets || rwTable.readThrottler != null);
+      Assert.assertTrue(!rlPuts || rwTable.writeThrottler != null);
     }
+
+    Assert.assertNotNull(rwTable.requestManager.retryHelper);
+    Assert.assertEquals(rwTable.requestManager.retryHelper.getMaxRetryCount(), 123);
+    Assert.assertTrue(rwTable.requestManager.requestQueue.remainingCapacity() == 1000);
 
     // Verify rate limiter usage
     if (numRateLimitOps > 0) {
@@ -184,24 +192,15 @@ public class TestRemoteTableDescriptor {
       rwTable.put("yyy", "zzz");
 
       if (!rateOnly) {
-        verify(rwTable.rateLimiter, times(numRateLimitOps)).acquire(anyMap());
-
-        CountingCreditFunction<?, ?> readCreditFn = (CountingCreditFunction<?, ?>) rwTable.readCreditFn;
-        CountingCreditFunction<?, ?> writeCreditFn = (CountingCreditFunction<?, ?>) rwTable.writeCreditFn;
-
-        Assert.assertNotNull(readCreditFn);
-        Assert.assertNotNull(writeCreditFn);
-
-        Assert.assertEquals(readCreditFn.numCalls, rlGets ? 1 : 0);
-        Assert.assertEquals(writeCreditFn.numCalls, rlPuts ? 1 : 0);
+        verify(rwTable.readThrottler.rateLimiter, times(numRateLimitOps)).acquire(any());
       } else {
-        Assert.assertTrue(rwTable.rateLimiter instanceof EmbeddedTaggedRateLimiter);
-        Assert.assertEquals(rwTable.rateLimiter.getSupportedTags().size(), numRateLimitOps);
+        Assert.assertEquals(rwTable.readThrottler.rateLimiter.getSupportedTags().size(), numRateLimitOps);
+
         if (rlGets) {
-          Assert.assertTrue(rwTable.rateLimiter.getSupportedTags().contains(RL_READ_TAG));
+          Assert.assertTrue(rwTable.readThrottler.rateLimiter.getSupportedTags().contains(RL_READ_TAG));
         }
         if (rlPuts) {
-          Assert.assertTrue(rwTable.rateLimiter.getSupportedTags().contains(RL_WRITE_TAG));
+          Assert.assertTrue(rwTable.writeThrottler.rateLimiter.getSupportedTags().contains(RL_WRITE_TAG));
         }
       }
     }
