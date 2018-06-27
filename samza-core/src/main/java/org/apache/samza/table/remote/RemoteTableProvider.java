@@ -35,6 +35,9 @@ import org.apache.samza.util.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_READ_TAG;
+import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_WRITE_TAG;
+
 
 /**
  * Provide for remote table instances
@@ -47,6 +50,7 @@ public class RemoteTableProvider implements TableProvider {
   static final String RATE_LIMITER = "io.ratelimiter";
   static final String READ_CREDIT_FN = "io.readCreditFn";
   static final String WRITE_CREDIT_FN = "io.writeCreditFn";
+  static final String MAX_ASYNC_REQUESTS = "io.maxPendingRequests";
 
   private final TableSpec tableSpec;
   private final boolean readOnly;
@@ -56,7 +60,7 @@ public class RemoteTableProvider implements TableProvider {
 
   public RemoteTableProvider(TableSpec tableSpec) {
     this.tableSpec = tableSpec;
-    readOnly = !tableSpec.getConfig().containsKey(WRITE_FN);
+    this.readOnly = !tableSpec.getConfig().containsKey(WRITE_FN);
   }
 
   /**
@@ -80,12 +84,19 @@ public class RemoteTableProvider implements TableProvider {
       rateLimiter.init(containerContext.config, taskContext);
     }
     CreditFunction<?, ?> readCreditFn = deserializeObject(READ_CREDIT_FN);
+    Throttler readThrottler = new Throttler(tableSpec.getId(), rateLimiter, readCreditFn, RL_READ_TAG);
+
+    int maxAsyncRequests = Integer.parseInt(tableSpec.getConfig().get(MAX_ASYNC_REQUESTS));
+    RequestManager requestManager = new RequestManager(tableSpec.getId(), maxAsyncRequests);
+
     if (readOnly) {
-      table = new RemoteReadableTable(tableSpec.getId(), readFn, rateLimiter, readCreditFn);
+      table = new RemoteReadableTable(tableSpec.getId(), readFn, readThrottler, requestManager);
     } else {
       CreditFunction<?, ?> writeCreditFn = deserializeObject(WRITE_CREDIT_FN);
-      table = new RemoteReadWriteTable(tableSpec.getId(), readFn, getWriteFn(), rateLimiter, readCreditFn, writeCreditFn);
+      Throttler writeThrottler = new Throttler(tableSpec.getId(), rateLimiter, writeCreditFn, RL_WRITE_TAG);
+      table = new RemoteReadWriteTable(tableSpec.getId(), readFn, getWriteFn(), readThrottler, writeThrottler, requestManager);
     }
+
     table.init(containerContext, taskContext);
     tables.add(table);
     return table;

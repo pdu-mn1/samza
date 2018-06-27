@@ -69,6 +69,8 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
   private CreditFunction<K, V> readCreditFn;
   private CreditFunction<K, V> writeCreditFn;
 
+  private int maxPendingRequests = 1000;
+
   /**
    * Construct a table descriptor instance
    * @param tableId Id of the table
@@ -111,6 +113,8 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
           "write credit function", writeCreditFn));
     }
 
+    tableSpecConfig.put(RemoteTableProvider.MAX_ASYNC_REQUESTS, String.valueOf(maxPendingRequests));
+
     return new TableSpec(tableId, serde, RemoteTableProviderFactory.class.getName(), tableSpecConfig);
   }
 
@@ -139,7 +143,7 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
   /**
    * Specify a rate limiter along with credit functions to map a table record (as KV) to the amount
    * of credits to be charged from the rate limiter for table read and write operations.
-   * This is an advanced API that provides greater flexibility to throttle each record in the table
+   * This is an advanced API that provides greater flexibility to throttleKeys each record in the table
    * with different number of credits. For most common use-cases eg: limit the number of read/write
    * operations, please instead use the {@link RemoteTableDescriptor#withReadRateLimit(int)} and
    * {@link RemoteTableDescriptor#withWriteRateLimit(int)}.
@@ -181,6 +185,19 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
   public RemoteTableDescriptor<K, V> withWriteRateLimit(int creditsPerSec) {
     Preconditions.checkArgument(creditsPerSec > 0, "Max write rate must be a positive number.");
     tagCreditsMap.put(RL_WRITE_TAG, creditsPerSec);
+    return this;
+  }
+
+  /**
+   * Specify the maximum number of pending async requests queued up due to rate limiting.
+   * When this limit is hit, further async operations will be blocked for back pressure
+   * until some existing async requests are dispatched after credits replenishment.
+   * @param maxRequests max number of async requests submitted but yet dispatched due to throttling
+   * @return this table descriptor instance
+   */
+  public RemoteTableDescriptor<K, V> withMaxAsyncRequests(int maxRequests) {
+    Preconditions.checkArgument(maxRequests > 0, "Max async requests must be a positive number.");
+    this.maxPendingRequests = maxRequests;
     return this;
   }
 

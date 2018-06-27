@@ -19,20 +19,28 @@
 
 package org.apache.samza.table.caching;
 
+import java.util.ArrayList;
+import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.locks.Lock;
+import java.util.stream.Collectors;
 
 import org.apache.samza.container.SamzaContainerContext;
 import org.apache.samza.storage.kv.Entry;
+import org.apache.samza.table.utils.CallbackUtils;
 import org.apache.samza.table.ReadWriteTable;
 import org.apache.samza.table.ReadableTable;
+import org.apache.samza.table.TableOpCallback;
 import org.apache.samza.table.utils.DefaultTableReadMetrics;
 import org.apache.samza.table.utils.DefaultTableWriteMetrics;
 import org.apache.samza.table.utils.TableMetricsUtil;
 import org.apache.samza.task.TaskContext;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 import com.google.common.base.Preconditions;
 import com.google.common.util.concurrent.Striped;
@@ -64,7 +72,7 @@ import com.google.common.util.concurrent.Striped;
  * @param <V> type of the table value
  */
 public class CachingTable<K, V> implements ReadWriteTable<K, V> {
-  private static final String GROUP_NAME = CachingTable.class.getSimpleName();
+  private static final Logger LOG = LoggerFactory.getLogger(CachingTable.class);
 
   private final String tableId;
   private final ReadableTable<K, V> rdTable;
@@ -79,6 +87,8 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
   private DefaultTableReadMetrics readMetrics;
   private DefaultTableWriteMetrics writeMetrics;
 
+  private CallbackUtils callbackHelper;
+
   // Common caching stats
   private AtomicLong hitCount = new AtomicLong();
   private AtomicLong missCount = new AtomicLong();
@@ -90,6 +100,7 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
     this.cache = cache;
     this.isWriteAround = isWriteAround;
     this.stripedLocks = Striped.lazyWeakLock(stripes);
+    this.callbackHelper = new CallbackUtils(tableId, LOG);
   }
 
   /**
@@ -111,11 +122,11 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
     long startNs = System.nanoTime();
     V value = cache.get(key);
     if (value == null) {
-      missCount.incrementAndGet();
       Lock lock = stripedLocks.get(key);
       try {
         lock.lock();
         if (cache.get(key) == null) {
+          missCount.incrementAndGet();
           // Due to the lack of contains() API in ReadableTable, there is
           // no way to tell whether a null return by cache.get(key) means
           // cache miss or the value is actually null. As such, we cannot
@@ -136,13 +147,101 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
   }
 
   @Override
+  public void get(K key, TableOpCallback<V> callback) {
+    readMetrics.numGets.inc();
+    long startNs = System.nanoTime();
+    // Blocking get on cache
+    V value = cache.get(key);
+    if (value == null) {
+      missCount.incrementAndGet();
+
+      // No locking here because we cannot block in async context.
+      // As such it is possible to create duplicate async requests
+      // with concurrent get of the same key until cache is updated.
+      rdTable.get(key, (newVal, error) -> {
+          if (error == null) {
+            Lock lock = stripedLocks.get(key);
+            try {
+              lock.lock();
+              if (cache.get(key) == null) {
+                cache.put(key, newVal);
+              }
+            } finally {
+              lock.unlock();
+            }
+          }
+          readMetrics.getNs.update(System.nanoTime() - startNs);
+          callbackHelper.invoke(callback, newVal, error, readMetrics.getCallbackNs);
+        });
+    } else {
+      hitCount.incrementAndGet();
+      readMetrics.getNs.update(System.nanoTime() - startNs);
+      // Notify immediately if cache is hit
+      callbackHelper.invoke(callback, value, null, readMetrics.getCallbackNs);
+    }
+  }
+
+  @Override
   public Map<K, V> getAll(List<K> keys) {
     readMetrics.numGetAlls.inc();
     long startNs = System.nanoTime();
     Map<K, V> getAllResult = new HashMap<>();
-    keys.stream().forEach(k -> getAllResult.put(k, get(k)));
+    // Blocking get on cache
+    List<K> missingKeys = lookup(keys, getAllResult);
+
+    if (!missingKeys.isEmpty()) {
+      // Batch fetch all missing keys.
+      Iterable<Lock> locks = stripedLocks.bulkGet(keys);
+      Map<K, V> values = Collections.EMPTY_MAP;
+      try {
+        locks.forEach(Lock::lock);
+        values = rdTable.getAll(missingKeys);
+        // Update cache with fetched values
+        values.forEach((k, v) -> cache.put(k, v));
+      } finally {
+        locks.forEach(Lock::unlock);
+      }
+
+      // Update result with fetched entries
+      getAllResult.putAll(values);
+    }
+
     readMetrics.getAllNs.update(System.nanoTime() - startNs);
+
     return getAllResult;
+  }
+
+  @Override
+  public void getAll(List<K> keys, TableOpCallback<Map<K, V>> callback) {
+    readMetrics.numGetAlls.inc();
+    long startNs = System.nanoTime();
+    Map<K, V> getAllResult = new HashMap<>();
+    // Blocking get on cache
+    List<K> missingKeys = lookup(keys, getAllResult);
+
+    hitCount.addAndGet(keys.size() - missingKeys.size());
+    missCount.addAndGet(missingKeys.size());
+
+    if (!missingKeys.isEmpty()) {
+      // Batch fetch all missing keys.
+      // No locking here because we cannot block in async context.
+      // As such it is possible to create duplicate async requests
+      // with concurrent get of the same keys until cache is updated.
+      rdTable.getAll(missingKeys, (values, error) -> {
+          if (error == null) {
+            // Update result with fetched values
+            getAllResult.putAll(values);
+
+            // Update cache with fetched values
+            values.forEach((k, v) -> cache.put(k, v));
+          }
+          readMetrics.getAllNs.update(System.nanoTime() - startNs);
+          callbackHelper.invoke(callback, getAllResult, error, readMetrics.getCallbackNs);
+        });
+    } else {
+      // Notify immediately if all keys are hit
+      callback.onComplete(getAllResult, null);
+    }
   }
 
   @Override
@@ -164,12 +263,64 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
   }
 
   @Override
+  public void put(K key, V value, TableOpCallback callback) {
+    writeMetrics.numPuts.inc();
+    long startNs = System.nanoTime();
+    Preconditions.checkNotNull(rwTable, "Cannot write to a read-only table: " + rdTable);
+
+    rwTable.put(key, value, (dummy, error) -> {
+        if (error != null && !isWriteAround) {
+          Lock lock = stripedLocks.get(key);
+          try {
+            lock.lock();
+            cache.put(key, value);
+          } finally {
+            lock.unlock();
+          }
+        }
+        writeMetrics.putNs.update(System.nanoTime() - startNs);
+        callbackHelper.invoke(callback, dummy, error, writeMetrics.putCallbackNs);
+      });
+  }
+
+  @Override
   public void putAll(List<Entry<K, V>> entries) {
     writeMetrics.numPutAlls.inc();
     long startNs = System.nanoTime();
     Preconditions.checkNotNull(rwTable, "Cannot write to a read-only table: " + rdTable);
-    entries.forEach(e -> put(e.getKey(), e.getValue()));
+    Set<K> keys = entries.stream().map(Entry::getKey).collect(Collectors.toSet());
+    Iterable<Lock> locks = stripedLocks.bulkGet(keys);
+    try {
+      locks.forEach(Lock::lock);
+      rwTable.putAll(entries);
+      if (!isWriteAround) {
+        cache.putAll(entries);
+      }
+    } finally {
+      locks.forEach(Lock::unlock);
+    }
     writeMetrics.putAllNs.update(System.nanoTime() - startNs);
+  }
+
+  @Override
+  public void putAll(List<Entry<K, V>> entries, TableOpCallback callback) {
+    writeMetrics.numPutAlls.inc();
+    long startNs = System.nanoTime();
+    Preconditions.checkNotNull(rwTable, "Cannot write to a read-only table: " + rdTable);
+    rwTable.putAll(entries, (dummy, error) -> {
+        if (error != null && !isWriteAround) {
+          Set<K> keys = entries.stream().map(Entry::getKey).collect(Collectors.toSet());
+          Iterable<Lock> locks = stripedLocks.bulkGet(keys);
+          try {
+            locks.forEach(Lock::lock);
+            cache.putAll(entries);
+          } finally {
+            locks.forEach(Lock::unlock);
+          }
+        }
+        writeMetrics.putAllNs.update(System.nanoTime() - startNs);
+        callbackHelper.invoke(callback, dummy, error, writeMetrics.putCallbackNs);
+      });
   }
 
   @Override
@@ -189,12 +340,59 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
   }
 
   @Override
+  public void delete(K key, TableOpCallback callback) {
+    writeMetrics.numDeletes.inc();
+    long startNs = System.nanoTime();
+    Preconditions.checkNotNull(rwTable, "Cannot delete from a read-only table: " + rdTable);
+    rwTable.delete(key, (dummy, error) -> {
+        if (error != null) {
+          Lock lock = stripedLocks.get(key);
+          try {
+            lock.lock();
+            cache.delete(key);
+          } finally {
+            lock.unlock();
+          }
+        }
+        writeMetrics.deleteNs.update(System.nanoTime() - startNs);
+        callbackHelper.invoke(callback, dummy, error, writeMetrics.deleteCallbackNs);
+      });
+  }
+
+  @Override
   public void deleteAll(List<K> keys) {
     writeMetrics.numDeleteAlls.inc();
     long startNs = System.nanoTime();
     Preconditions.checkNotNull(rwTable, "Cannot delete from a read-only table: " + rdTable);
-    keys.stream().forEach(k -> delete(k));
+    Iterable<Lock> locks = stripedLocks.bulkGet(keys);
+    try {
+      locks.forEach(Lock::lock);
+      rwTable.deleteAll(keys);
+      cache.deleteAll(keys);
+    } finally {
+      locks.forEach(Lock::unlock);
+    }
     writeMetrics.deleteAllNs.update(System.nanoTime() - startNs);
+  }
+
+  @Override
+  public void deleteAll(List<K> keys, TableOpCallback callback) {
+    writeMetrics.numDeleteAlls.inc();
+    long startNs = System.nanoTime();
+    Preconditions.checkNotNull(rwTable, "Cannot delete from a read-only table: " + rdTable);
+    rwTable.deleteAll(keys, (dummy, error) -> {
+        if (error != null) {
+          Iterable<Lock> locks = stripedLocks.bulkGet(keys);
+          try {
+            locks.forEach(Lock::lock);
+            cache.deleteAll(keys);
+          } finally {
+            locks.forEach(Lock::unlock);
+          }
+        }
+        writeMetrics.deleteAllNs.update(System.nanoTime() - startNs);
+        callbackHelper.invoke(callback, dummy, error, writeMetrics.deleteCallbackNs);
+      });
   }
 
   @Override
@@ -210,6 +408,19 @@ public class CachingTable<K, V> implements ReadWriteTable<K, V> {
   public void close() {
     this.cache.close();
     this.rdTable.close();
+  }
+
+  private List<K> lookup(List<K> keys, Map<K, V> entries) {
+    List<K> missKeys = new ArrayList<>();
+    keys.forEach(k -> {
+        V value = cache.get(k);
+        if (value == null) {
+          missKeys.add(k);
+        } else {
+          entries.put(k, value);
+        }
+      });
+    return missKeys;
   }
 
   double hitRate() {

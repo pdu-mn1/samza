@@ -25,19 +25,17 @@ import java.util.Map;
 
 import org.apache.samza.SamzaException;
 import org.apache.samza.container.SamzaContainerContext;
-import org.apache.samza.metrics.Timer;
-import org.apache.samza.operators.KV;
 import org.apache.samza.table.ReadableTable;
+import org.apache.samza.table.TableOpCallback;
+import org.apache.samza.table.utils.CallbackUtils;
 import org.apache.samza.table.utils.DefaultTableReadMetrics;
 import org.apache.samza.table.utils.TableMetricsUtil;
 import org.apache.samza.task.TaskContext;
-import org.apache.samza.util.RateLimiter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Preconditions;
-
-import static org.apache.samza.table.remote.RemoteTableDescriptor.RL_READ_TAG;
 
 
 /**
@@ -67,34 +65,32 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
 
   protected final String tableId;
   protected final Logger logger;
-  protected final TableReadFunction<K, V> readFn;
-  protected final String groupName;
-  protected final RateLimiter rateLimiter;
-  protected final CreditFunction<K, V> readCreditFn;
-  protected final boolean rateLimitReads;
+  protected final CallbackUtils callbackHelper;
 
-  protected DefaultTableReadMetrics readMetrics;
-  protected Timer getThrottleNs;
+  @VisibleForTesting
+  final Throttler<K, V> readThrottler;
+  final RequestManager<K, V> requestManager;
+
+  private final TableReadFunction<K, V> readFn;
+  private DefaultTableReadMetrics readMetrics;
 
   /**
    * Construct a RemoteReadableTable instance
    * @param tableId table id
    * @param readFn {@link TableReadFunction} for read operations
-   * @param rateLimiter optional {@link RateLimiter} for throttling reads
-   * @param readCreditFn function returning a credit to be charged for rate limiting per record
+   * @param throttler throttler for rate limiting
+   * @param requestManager request manager
    */
-  public RemoteReadableTable(String tableId, TableReadFunction<K, V> readFn, RateLimiter rateLimiter,
-      CreditFunction<K, V> readCreditFn) {
+  public RemoteReadableTable(String tableId, TableReadFunction<K, V> readFn,
+      Throttler<K, V> throttler, RequestManager<K, V> requestManager) {
     Preconditions.checkArgument(tableId != null && !tableId.isEmpty(), "invalid table id");
     Preconditions.checkNotNull(readFn, "null read function");
     this.tableId = tableId;
     this.readFn = readFn;
-    this.rateLimiter = rateLimiter;
-    this.readCreditFn = readCreditFn;
-    this.groupName = getClass().getSimpleName();
-    this.logger = LoggerFactory.getLogger(groupName + tableId);
-    this.rateLimitReads = rateLimiter != null && rateLimiter.getSupportedTags().contains(RL_READ_TAG);
-    logger.info("Rate limiting is {} for remote read operations", rateLimitReads ? "enabled" : "disabled");
+    this.logger = LoggerFactory.getLogger(getClass().getName() + "-" + tableId);
+    this.callbackHelper = new CallbackUtils(tableId, logger);
+    this.readThrottler = throttler;
+    this.requestManager = requestManager;
   }
 
   /**
@@ -104,7 +100,7 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
   public void init(SamzaContainerContext containerContext, TaskContext taskContext) {
     readMetrics = new DefaultTableReadMetrics(containerContext, taskContext, this, tableId);
     TableMetricsUtil tableMetricsUtil = new TableMetricsUtil(containerContext, taskContext, this, tableId);
-    getThrottleNs = tableMetricsUtil.newTimer("get-throttle-ns");
+    readThrottler.setTimerMetric(tableMetricsUtil.newTimer("get-throttle-ns"));
   }
 
   /**
@@ -112,13 +108,12 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
    */
   @Override
   public V get(K key) {
+    Preconditions.checkNotNull(key);
+
     try {
       readMetrics.numGets.inc();
-      if (rateLimitReads) {
-        throttle(key, null, RL_READ_TAG, readCreditFn, getThrottleNs);
-      }
       long startNs = System.nanoTime();
-      V result = readFn.get(key);
+      V result = requestManager.execute(key, () -> readFn.get(key), readThrottler);
       readMetrics.getNs.update(System.nanoTime() - startNs);
       return result;
     } catch (Exception e) {
@@ -128,16 +123,38 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
     }
   }
 
+  @Override
+  public void get(K key, TableOpCallback<V> callback) {
+    Preconditions.checkNotNull(key);
+    Preconditions.checkNotNull(callback);
+    readMetrics.numGets.inc();
+    requestManager.executeAsync(key, () -> {
+        final long startNs = System.nanoTime();
+        readFn.get(key, (value, error) -> {
+            readMetrics.getNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error(String.format("Failed to get a record, key=%s", key), error);
+            }
+            callbackHelper.invoke(callback, value, error, readMetrics.getCallbackNs);
+          });
+      }, readThrottler);
+  }
+
   /**
    * {@inheritDoc}
    */
   @Override
   public Map<K, V> getAll(List<K> keys) {
-    Map<K, V> result;
+    Preconditions.checkNotNull(keys);
+    if (keys.isEmpty()) {
+      return Collections.EMPTY_MAP;
+    }
+
+    final Map<K, V> result;
     try {
       readMetrics.numGetAlls.inc();
       long startNs = System.nanoTime();
-      result = readFn.getAll(keys);
+      result = requestManager.execute(keys, () -> readFn.getAll(keys), readThrottler);
       readMetrics.getAllNs.update(System.nanoTime() - startNs);
     } catch (Exception e) {
       String errMsg = "Failed to get some records";
@@ -160,26 +177,42 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
     return result;
   }
 
+  @Override
+  public void getAll(List<K> keys, TableOpCallback<Map<K, V>> callback) {
+    Preconditions.checkNotNull(keys);
+    Preconditions.checkNotNull(callback);
+    if (keys.isEmpty()) {
+      callbackHelper.invoke(callback, Collections.EMPTY_LIST, null, readMetrics.getCallbackNs);
+    }
+
+    readMetrics.numGetAlls.inc();
+
+    final long startNs = System.nanoTime();
+    requestManager.executeAsync(keys, () -> {
+        readFn.getAll(keys, (values, error) -> {
+            readMetrics.getAllNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error("Failed to get some records", error);
+            } else if (values == null) {
+              String errMsg = String.format("Received null records, keys=%s", keys);
+              logger.error(errMsg);
+              error = new SamzaException(errMsg);
+            } else if (values.size() < keys.size()) {
+              String errMsg = String.format("Received insufficient number of records (%d), keys=%s", values.size(), keys);
+              logger.error(errMsg);
+              error = new SamzaException(errMsg);
+            }
+            callbackHelper.invoke(callback, values, error, readMetrics.getCallbackNs);
+          });
+      }, readThrottler);
+  }
+
   /**
    * {@inheritDoc}
    */
   @Override
   public void close() {
+    requestManager.shutdown();
     readFn.close();
-  }
-
-  /**
-   * Throttle requests given a table record (key, value) with rate limiter and credit function
-   * @param key key of the table record (nullable)
-   * @param value value of the table record (nullable)
-   * @param tag tag for rate limiter
-   * @param creditFn mapper function from KV to credits to be charged
-   * @param timer timer metric to track throttling delays
-   */
-  protected void throttle(K key, V value, String tag, CreditFunction<K, V> creditFn, Timer timer) {
-    long startNs = System.nanoTime();
-    int credits = (creditFn == null) ? 1 : creditFn.apply(KV.of(key, value));
-    rateLimiter.acquire(Collections.singletonMap(tag, credits));
-    timer.update(System.nanoTime() - startNs);
   }
 }

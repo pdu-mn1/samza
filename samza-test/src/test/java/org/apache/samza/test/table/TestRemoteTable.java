@@ -46,11 +46,13 @@ import org.apache.samza.serializers.NoOpSerde;
 import org.apache.samza.table.Table;
 import org.apache.samza.table.caching.CachingTableDescriptor;
 import org.apache.samza.table.caching.guava.GuavaCacheTableDescriptor;
+import org.apache.samza.table.remote.RequestManager;
 import org.apache.samza.table.remote.TableReadFunction;
 import org.apache.samza.table.remote.TableWriteFunction;
 import org.apache.samza.table.remote.RemoteReadableTable;
 import org.apache.samza.table.remote.RemoteTableDescriptor;
 import org.apache.samza.table.remote.RemoteReadWriteTable;
+import org.apache.samza.table.remote.Throttler;
 import org.apache.samza.task.TaskContext;
 import org.apache.samza.test.harness.AbstractIntegrationTestHarness;
 import org.apache.samza.test.util.Base64Serializer;
@@ -231,7 +233,8 @@ public class TestRemoteTable extends AbstractIntegrationTestHarness {
   public void testCatchReaderException() {
     TableReadFunction<String, ?> reader = mock(TableReadFunction.class);
     doThrow(new RuntimeException("Expected test exception")).when(reader).get(anyString());
-    RemoteReadableTable<String, ?> table = new RemoteReadableTable<>("table1", reader, null, null);
+    RemoteReadableTable<String, ?> table = new RemoteReadableTable<>("table1", reader,
+        mock(Throttler.class), new RequestManager<>("table1", 100));
     table.init(mock(SamzaContainerContext.class), createMockTaskContext());
     table.get("abc");
   }
@@ -241,7 +244,8 @@ public class TestRemoteTable extends AbstractIntegrationTestHarness {
     TableReadFunction<String, String> reader = mock(TableReadFunction.class);
     TableWriteFunction<String, String> writer = mock(TableWriteFunction.class);
     doThrow(new RuntimeException("Expected test exception")).when(writer).put(anyString(), any());
-    RemoteReadWriteTable<String, String> table = new RemoteReadWriteTable<>("table1", reader, writer, null, null, null);
+    RemoteReadWriteTable<String, String> table = new RemoteReadWriteTable<>("table1", reader, writer,
+        mock(Throttler.class), mock(Throttler.class), new RequestManager<>("table1", 100));
     table.init(mock(SamzaContainerContext.class), createMockTaskContext());
     table.put("abc", "efg");
   }

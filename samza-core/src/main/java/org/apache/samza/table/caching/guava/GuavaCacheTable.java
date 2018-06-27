@@ -40,8 +40,6 @@ import com.google.common.cache.Cache;
  * @param <V> type of the value in the cache
  */
 public class GuavaCacheTable<K, V> implements ReadWriteTable<K, V> {
-  private static final String GROUP_NAME = GuavaCacheTableProvider.class.getSimpleName();
-
   private final String tableId;
   private final Cache<K, V> cache;
 

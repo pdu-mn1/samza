@@ -33,7 +33,8 @@ import org.apache.samza.storage.kv.Entry;
 public interface ReadWriteTable<K, V> extends ReadableTable<K, V> {
 
   /**
-   * Updates the mapping of the specified key-value pair; Associates the specified {@code key} with the specified {@code value}.
+   * Updates the mapping of the specified key-value pair;
+   * Associates the specified {@code key} with the specified {@code value}.
    *
    * The key is deleted from the table if value is {@code null}.
    *
@@ -42,6 +43,26 @@ public interface ReadWriteTable<K, V> extends ReadableTable<K, V> {
    * @throws NullPointerException if the specified {@code key} is {@code null}.
    */
   void put(K key, V value);
+
+  /**
+   * Asynchronously Updates the mapping of the specified key-value pair;
+   * Associates the specified {@code key} with the specified {@code value}.
+   * The key is deleted from the table if value is {@code null}.
+   * Default implementation delegates to the synchronous method.
+   *
+   * @param key the key with which the specified {@code value} is to be associated.
+   * @param value the value with which the specified {@code key} is to be associated.
+   * @param callback method to be invoked when the put is done or fails.
+   * @throws NullPointerException if the specified {@code key} is {@code null}.
+   */
+  default void put(K key, V value, TableOpCallback callback) {
+    try {
+      put(key, value);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
 
   /**
    * Updates the mappings of the specified key-value {@code entries}.
@@ -54,12 +75,46 @@ public interface ReadWriteTable<K, V> extends ReadableTable<K, V> {
   void putAll(List<Entry<K, V>> entries);
 
   /**
+   * Asynchronously updates the mappings of the specified key-value {@code entries}.
+   * A key is deleted from the table if its corresponding value is {@code null}.
+   * Default implementation delegates to the synchronous method.
+   *
+   * @param entries the updated mappings to put into this table.
+   * @param callback method to be invoked when the putAll is done or fails.
+   * @throws NullPointerException if any of the specified {@code entries} has {@code null} as key.
+   */
+  default void putAll(List<Entry<K, V>> entries, TableOpCallback callback) {
+    try {
+      putAll(entries);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
+
+  /**
    * Deletes the mapping for the specified {@code key} from this table (if such mapping exists).
    *
    * @param key the key for which the mapping is to be deleted.
    * @throws NullPointerException if the specified {@code key} is {@code null}.
    */
   void delete(K key);
+
+  /**
+   * Asynchronously deletes the mapping for the specified {@code key} from this table (if such mapping exists).
+   * Default implementation delegates to the synchronous method.
+   * @param key the key for which the mapping is to be deleted.
+   * @param callback method to be invoked when the delete is done or fails.
+   * @throws NullPointerException if the specified {@code key} is {@code null}.
+   */
+  default void delete(K key, TableOpCallback callback) {
+    try {
+      delete(key);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
 
   /**
    * Deletes the mappings for the specified {@code keys} from this table.
@@ -69,6 +124,21 @@ public interface ReadWriteTable<K, V> extends ReadableTable<K, V> {
    */
   void deleteAll(List<K> keys);
 
+  /**
+   * Asynchronously deletes the mappings for the specified {@code keys} from this table.
+   * Default implementation delegates to the synchronous method.
+   * @param keys the keys for which the mappings are to be deleted.
+   * @param callback method to be invoked when the deleteAll is done or fails.
+   * @throws NullPointerException if the specified {@code keys} list, or any of the keys, is {@code null}.
+   */
+  default void deleteAll(List<K> keys, TableOpCallback callback) {
+    try {
+      deleteAll(keys);
+      callback.onComplete(null, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
 
   /**
    * Flushes the underlying store of this table, if applicable.

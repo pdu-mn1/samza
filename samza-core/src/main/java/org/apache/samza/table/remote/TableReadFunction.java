@@ -22,11 +22,13 @@ package org.apache.samza.table.remote;
 import java.io.Serializable;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
 import org.apache.samza.annotation.InterfaceStability;
 import org.apache.samza.operators.functions.ClosableFunction;
 import org.apache.samza.operators.functions.InitableFunction;
+import org.apache.samza.table.TableOpCallback;
 
 
 /**
@@ -50,6 +52,20 @@ public interface TableReadFunction<K, V> extends Serializable, InitableFunction,
   V get(K key);
 
   /**
+   * Asynchronously fetch single table record for a specified {@code key}. This method must be thread-safe.
+   * @param key key for the table record
+   * @param callback method to be invoked when the result is ready or fails.
+   */
+  default void get(K key, TableOpCallback<V> callback) {
+    try {
+      V result = get(key);
+      callback.onComplete(result, null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
+  }
+
+  /**
    * Fetch the table {@code records} for specified {@code keys}. This method must be thread-safe.
    * @param keys keys for the table records
    * @return all records for the specified keys if succeeded; depending on the implementation
@@ -60,6 +76,21 @@ public interface TableReadFunction<K, V> extends Serializable, InitableFunction,
     Map<K, V> records = new HashMap<>();
     keys.forEach(k -> records.put(k, get(k)));
     return records;
+  }
+
+  /**
+   * Asynchronously fetch the table {@code records} for specified {@code keys}. This method must be thread-safe.
+   * @param keys keys for the table records
+   * @param callback method to be invoked when the results are ready or fails.
+   * of {@link TableReadFunction#get(Object)} it either returns records for a subset of the
+   * keys or throws exception when there is any failure.
+   */
+  default void getAll(List<K> keys, TableOpCallback<Map<K, V>> callback) {
+    try {
+      callback.onComplete(getAll(keys), null);
+    } catch (Exception e) {
+      callback.onComplete(null, e);
+    }
   }
 
   // optionally implement readObject() to initialize transient states

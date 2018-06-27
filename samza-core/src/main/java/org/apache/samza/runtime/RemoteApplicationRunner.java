@@ -79,7 +79,7 @@ public class RemoteApplicationRunner extends AbstractApplicationRunner {
       }
       streamManager.createStreams(plan.getIntermediateStreams());
 
-      // 3. submit jobs for remote execution
+      // 3. throttleAsync jobs for remote execution
       plan.getJobConfigs().forEach(jobConfig -> {
           LOG.info("Starting job {} with config {}", jobConfig.getName(), jobConfig);
           JobRunner runner = new JobRunner(jobConfig);

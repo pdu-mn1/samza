@@ -20,7 +20,9 @@
 package org.apache.samza.table.caching;
 
 import java.time.Duration;
+import java.util.Arrays;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Random;
 import java.util.concurrent.ConcurrentHashMap;
@@ -32,6 +34,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.commons.lang3.tuple.Pair;
 import org.apache.samza.container.SamzaContainerContext;
 import org.apache.samza.operators.TableImpl;
+import org.apache.samza.storage.kv.Entry;
 import org.apache.samza.table.ReadWriteTable;
 import org.apache.samza.table.ReadableTable;
 import org.apache.samza.table.Table;
@@ -271,6 +274,14 @@ public class TestCachingTable {
     Map<String, String> tableMap = tableMapPair.getRight();
 
     final Random rand = new Random(System.currentTimeMillis());
+    final List<String> batchGetKeys = Arrays.asList("1", "3", "5", "7", "9");
+    final List<String> batchDeleteKeys = Arrays.asList("1", "4", "6", "7", "9");
+    final List<Entry<String, String>> batchPutEntries = Arrays.asList(
+        new Entry<>("1", "val1"),
+        new Entry<>("3", "val3"),
+        new Entry<>("6", "val6"),
+        new Entry<>("8", "val8"),
+        new Entry<>("9", "val9"));
 
     for (int i = 0; i < numThreads; i++) {
       executor.submit(() -> {
@@ -283,7 +294,7 @@ public class TestCachingTable {
 
           String lastPutKey = null;
           for (int j = 0; j < iterations; j++) {
-            int cmd = rand.nextInt(3);
+            int cmd = rand.nextInt(6);
             String key = String.valueOf(rand.nextInt(10));
             switch (cmd) {
               case 0:
@@ -297,6 +308,15 @@ public class TestCachingTable {
                 if (lastPutKey != null) {
                   cachingTable.delete(lastPutKey);
                 }
+                break;
+              case 3:
+                cachingTable.getAll(batchGetKeys);
+                break;
+              case 4:
+                cachingTable.putAll(batchPutEntries);
+                break;
+              case 5:
+                cachingTable.deleteAll(batchDeleteKeys);
                 break;
             }
           }
