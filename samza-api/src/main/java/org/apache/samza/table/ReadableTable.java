@@ -61,8 +61,8 @@ public interface ReadableTable<K, V> extends Table<KV<K, V>> {
    * @param callback method to be invoked when the result is ready or fails.
    * @throws NullPointerException if the specified {@code key} is {@code null}.
 
-   * @param key
-   * @param callback
+   * @param key the key with which the associated value is to be fetched.
+   * @param callback callback to be run after the request is finished
    */
   default void get(K key, TableOpCallback<V> callback) {
     try {

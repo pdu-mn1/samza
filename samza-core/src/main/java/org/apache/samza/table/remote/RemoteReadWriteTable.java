@@ -104,15 +104,15 @@ public class RemoteReadWriteTable<K, V> extends RemoteReadableTable<K, V> implem
     writeMetrics.numPuts.inc();
 
     requestManager.executeAsync(key, value, () -> {
-      final long startNs = System.nanoTime();
-      writeFn.put(key, value, requestManager.decorate((dummy, error) -> {
-        writeMetrics.putNs.update(System.nanoTime() - startNs);
-        if (error != null) {
-          logger.error(String.format("Failed to put a record, key=%s, value=%s", key, value), error);
-        }
-        callbackHelper.invoke(callback, dummy, error, writeMetrics.putCallbackNs);
-      }));
-    }, writeThrottler);
+        final long startNs = System.nanoTime();
+        writeFn.put(key, value, requestManager.decorate((dummy, error) -> {
+            writeMetrics.putNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error(String.format("Failed to put a record, key=%s, value=%s", key, value), error);
+            }
+            callbackHelper.invoke(callback, dummy, error, writeMetrics.putCallbackNs);
+          }));
+      }, writeThrottler);
   }
 
   /**
@@ -149,13 +149,13 @@ public class RemoteReadWriteTable<K, V> extends RemoteReadableTable<K, V> implem
     final long startNs = System.nanoTime();
 
     requestManager.executeEntriesAsync(entries, () ->
-      writeFn.putAll(entries, requestManager.decorate((dummy, error) -> {
-        writeMetrics.putAllNs.update(System.nanoTime() - startNs);
-        if (error != null) {
-          logger.error(String.format("Failed to put records: %s", entries), error);
-        }
-        callbackHelper.invoke(callback, dummy, error, writeMetrics.putCallbackNs);
-      })), writeThrottler);
+        writeFn.putAll(entries, requestManager.decorate((dummy, error) -> {
+            writeMetrics.putAllNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error(String.format("Failed to put records: %s", entries), error);
+            }
+            callbackHelper.invoke(callback, dummy, error, writeMetrics.putCallbackNs);
+          })), writeThrottler);
   }
 
   /**
@@ -183,14 +183,14 @@ public class RemoteReadWriteTable<K, V> extends RemoteReadableTable<K, V> implem
     writeMetrics.numDeletes.inc();
     final long startNs = System.nanoTime();
     requestManager.executeAsync(key, () -> {
-      writeFn.delete(key, requestManager.decorate((dummy, error) -> {
-        writeMetrics.deleteNs.update(System.nanoTime() - startNs);
-        if (error != null) {
-          logger.error(String.format("Failed to delete a record, key=%s", key), error);
-        }
-        callbackHelper.invoke(callback, dummy, error, writeMetrics.deleteCallbackNs);
-      }));
-    }, writeThrottler);
+        writeFn.delete(key, requestManager.decorate((dummy, error) -> {
+            writeMetrics.deleteNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error(String.format("Failed to delete a record, key=%s", key), error);
+            }
+            callbackHelper.invoke(callback, dummy, error, writeMetrics.deleteCallbackNs);
+          }));
+      }, writeThrottler);
   }
 
   /**
@@ -225,14 +225,14 @@ public class RemoteReadWriteTable<K, V> extends RemoteReadableTable<K, V> implem
     final long startNs = System.nanoTime();
 
     requestManager.executeAsync(keys, () -> {
-      writeFn.deleteAll(keys, requestManager.decorate((dummy, error) -> {
-        writeMetrics.deleteAllNs.update(System.nanoTime() - startNs);
-        if (error != null) {
-          logger.error(String.format("Failed to delete records, keys=%s", keys), error);
-        }
-        callbackHelper.invoke(callback, dummy, error, writeMetrics.deleteCallbackNs);
-      }));
-    }, writeThrottler);
+        writeFn.deleteAll(keys, requestManager.decorate((dummy, error) -> {
+            writeMetrics.deleteAllNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error(String.format("Failed to delete records, keys=%s", keys), error);
+            }
+            callbackHelper.invoke(callback, dummy, error, writeMetrics.deleteCallbackNs);
+          }));
+      }, writeThrottler);
   }
 
   /**

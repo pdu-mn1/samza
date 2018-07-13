@@ -22,8 +22,8 @@ package org.apache.samza.table;
 /**
  * Callback interface for asynchronous table operations.
  * @param <T> value type of the table
- * @see {@link ReadableTable}
- * @see {@link ReadWriteTable}
+ * @see ReadableTable
+ * @see ReadWriteTable
  */
 public interface TableOpCallback<T> {
   /**

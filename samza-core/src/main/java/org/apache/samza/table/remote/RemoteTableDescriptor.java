@@ -26,7 +26,6 @@ import org.apache.samza.operators.BaseTableDescriptor;
 import org.apache.samza.table.TableSpec;
 import org.apache.samza.table.utils.SerdeUtils;
 import org.apache.samza.util.EmbeddedTaggedRateLimiter;
-import org.apache.samza.util.ExponentialSleepStrategy;
 import org.apache.samza.util.RateLimiter;
 
 import com.google.common.base.Preconditions;
@@ -252,7 +251,7 @@ public class RemoteTableDescriptor<K, V> extends BaseTableDescriptor<K, V, Remot
   /**
    * Specify the maximum backoff time for a failed table request. Default is 1 minute.
    * @param maxRetryBackoffMs maximum backoff time in milliseconds
-   * @return
+   * @return this table descriptor instance
    */
   public RemoteTableDescriptor<K, V> withMaxRetryBackoffMs(long maxRetryBackoffMs) {
     Preconditions.checkArgument(maxRetryBackoffMs > 0, "Max retry backoff must be a non-negative number.");

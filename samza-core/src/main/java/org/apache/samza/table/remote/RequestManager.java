@@ -1,3 +1,22 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
 package org.apache.samza.table.remote;
 
 import java.util.List;
@@ -17,7 +36,6 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.google.common.annotations.VisibleForTesting;
-import scala.Function1;
 import scala.Option;
 import scala.runtime.AbstractFunction1;
 import scala.runtime.AbstractFunction2;
@@ -86,12 +104,12 @@ public class RequestManager<K, V> implements Runnable {
     }
   }
 
-  class RetryCallback<T> implements TableOpCallback<T> {
-    private final TableOpCallback<T> userCallback;
+  class RetryCallback<R> implements TableOpCallback<R> {
+    private final TableOpCallback<R> tableCallback;
     private Request request;
 
-    public RetryCallback(TableOpCallback<T> userCallback) {
-      this.userCallback = userCallback;
+    public RetryCallback(TableOpCallback<R> tableCallback) {
+      this.tableCallback = tableCallback;
     }
 
     public void setRequest(Request request) {
@@ -99,7 +117,7 @@ public class RequestManager<K, V> implements Runnable {
     }
 
     @Override
-    public void onComplete(T result, Throwable error) {
+    public void onComplete(R result, Throwable error) {
       if (error != null && request.retryCount < retryHelper.getMaxRetryCount()) {
         long backoffMs = retryHelper.getNextDelay(request.previousBackoff);
         request.previousBackoff = backoffMs;
@@ -109,7 +127,7 @@ public class RequestManager<K, V> implements Runnable {
         return;
       }
 
-      userCallback.onComplete(result, error);
+      tableCallback.onComplete(result, error);
     }
   }
 
@@ -120,11 +138,11 @@ public class RequestManager<K, V> implements Runnable {
     this.schedExecutor = Executors.newSingleThreadScheduledExecutor();
 
     Executors.newSingleThreadExecutor((arg) -> {
-      Thread thread = new Thread(arg);
-      thread.setName(tableId + "-request-manager");
-      thread.setDaemon(true);
-      return thread;
-    }).submit(this);
+        Thread thread = new Thread(arg);
+        thread.setName(tableId + "-request-manager");
+        thread.setDaemon(true);
+        return thread;
+      }).submit(this);
   }
 
   public void setRetryCounter(Counter retryCounter) {
@@ -154,6 +172,9 @@ public class RequestManager<K, V> implements Runnable {
   /**
    * Throttle the request given a table record (key, value)
    * @param key key of the table record
+   * @param method method to be executed
+   * @param throttler throttler instance
+   * @param <R> return type
    */
   public <R> R execute(K key, Supplier<R> method, Throttler<K, V> throttler) {
     return doExecute(throttler.getCredits(key, null), method, throttler);
@@ -163,6 +184,8 @@ public class RequestManager<K, V> implements Runnable {
    * Throttle the request given a table record (key, value)
    * @param key key of the table record
    * @param value value of the table record
+   * @param method method to be executed
+   * @param throttler throttler instance
    */
   public void execute(K key, V value, Runnable method, Throttler<K, V> throttler) {
     doExecute(throttler.getCredits(key, value), () -> { method.run(); return null; }, throttler);
@@ -171,6 +194,9 @@ public class RequestManager<K, V> implements Runnable {
   /**
    * Throttle the request given a list of table keys
    * @param keys list of keys
+   * @param method method to be executed
+   * @param throttler throttler instance
+   * @param <R> return type
    */
   public <R> R execute(List<K> keys, Supplier<R> method, Throttler<K, V> throttler) {
     return doExecute(throttler.getCredits(keys), method, throttler);
@@ -179,6 +205,8 @@ public class RequestManager<K, V> implements Runnable {
   /**
    * Throttle the request given a list of table records
    * @param entries list of records
+   * @param method method to be executed
+   * @param throttler throttler instance
    */
   // Have to be renamed because of type erasure
   public void executeEntries(List<Entry<K, V>> entries, Runnable method, Throttler<K, V> throttler) {
@@ -220,39 +248,53 @@ public class RequestManager<K, V> implements Runnable {
   /**
    * Asynchronously throttle the request given a table record
    * @param key key of the table record
+   * @param method method to be executed
+   * @param throttler throttler instance
    */
-  public void executeAsync(K key, Runnable runnable, Throttler<K, V> throttler) {
-    executeAsync(key, null, runnable, throttler);
+  public void executeAsync(K key, Runnable method, Throttler<K, V> throttler) {
+    executeAsync(key, null, method, throttler);
   }
 
   /**
    * Asynchronously throttle the request given a table record
    * @param key key of the table record
    * @param value value of the table record
+   * @param method method to be executed
+   * @param throttler throttler instance
    */
-  public void executeAsync(K key, V value, Runnable runnable, Throttler<K, V> throttler) {
-    requestQueue.add(new Request(throttler.getCredits(key, value), runnable, throttler));
+  public void executeAsync(K key, V value, Runnable method, Throttler<K, V> throttler) {
+    requestQueue.add(new Request(throttler.getCredits(key, value), method, throttler));
   }
 
   /**
    * Asynchronously throttle the request given a list of table keys
    * @param keys list of keys
+   * @param method method to be executed
+   * @param throttler throttler instance
    */
-  public void executeAsync(List<K> keys, Runnable runnable, Throttler<K, V> throttler) {
-    requestQueue.add(new Request(throttler.getCredits(keys), runnable, throttler));
+  public void executeAsync(List<K> keys, Runnable method, Throttler<K, V> throttler) {
+    requestQueue.add(new Request(throttler.getCredits(keys), method, throttler));
   }
 
   /**
    * Asynchronously throttle the request given a list of table records
    * @param entries list of records
+   * @param method method to be executed
+   * @param throttler throttler instance
    */
   // Have to be renamed because of type erasure
-  public void executeEntriesAsync(List<Entry<K, V>> entries, Runnable runnable, Throttler<K, V> throttler) {
-    requestQueue.add(new Request(throttler.getEntryCredits(entries), runnable, throttler));
+  public void executeEntriesAsync(List<Entry<K, V>> entries, Runnable method, Throttler<K, V> throttler) {
+    requestQueue.add(new Request(throttler.getEntryCredits(entries), method, throttler));
   }
 
-  public <T> RetryCallback<T> decorate(TableOpCallback<T> userCallback) {
-    return new RetryCallback<>(userCallback);
+  /**
+   * Decorate a table callback to add async retry capability.
+   * @param callback table callback
+   * @param <R> result type of callback
+   * @return decorated callback
+   */
+  public <R> RetryCallback<R> decorate(TableOpCallback<R> callback) {
+    return new RetryCallback<>(callback);
   }
 
   public void shutdown() {

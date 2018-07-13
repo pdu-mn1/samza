@@ -19,8 +19,6 @@
 
 package org.apache.samza.table.utils;
 
-import java.util.concurrent.ScheduledExecutorService;
-
 import org.apache.samza.metrics.Timer;
 import org.apache.samza.table.TableOpCallback;
 import org.slf4j.Logger;
@@ -41,13 +39,13 @@ public final class CallbackUtils {
   }
 
   /**
-   * Invoke a callback with the return {@code value} and {@error} from the async method.
+   * Invoke a callback with the return {@code value} and {@code error} from the async method.
    * The specified Timer metric is updated with the time taken by the callback to return.
    * Caller should ensure callback and metric are both valid to save null validation cost.
-   * @param callback
-   * @param value
-   * @param error
-   * @param metric
+   * @param callback application callback
+   * @param value value of the table record (nullable for write-only operation)
+   * @param error error exception thrown by the table function when it fails (nullable)
+   * @param metric timer metric to update the call time
    */
   public void invoke(TableOpCallback callback, Object value, Throwable error, Timer metric) {
     try {

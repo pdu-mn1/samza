@@ -35,8 +35,8 @@ import org.apache.samza.annotation.InterfaceStability;
 public interface CreditFunction<K, V> extends Serializable {
   /**
    * Get the number of credits required for the {@code key} and {@code value} pair.
-   * @param key
-   * @param value
+   * @param key table key
+   * @param value table record
    * @return number of credits
    */
   int getCredits(K key, V value);

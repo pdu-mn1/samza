@@ -130,15 +130,15 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
     Preconditions.checkNotNull(callback);
     readMetrics.numGets.inc();
     requestManager.executeAsync(key, () -> {
-      final long startNs = System.nanoTime();
-      readFn.get(key, requestManager.decorate((value, error) -> {
-        readMetrics.getNs.update(System.nanoTime() - startNs);
-        if (error != null) {
-          logger.error(String.format("Failed to get a record, key=%s", key), error);
-        }
-        callbackHelper.invoke(callback, value, error, readMetrics.getCallbackNs);
-      }));
-    }, readThrottler);
+        final long startNs = System.nanoTime();
+        readFn.get(key, requestManager.decorate((value, error) -> {
+            readMetrics.getNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error(String.format("Failed to get a record, key=%s", key), error);
+            }
+            callbackHelper.invoke(callback, value, error, readMetrics.getCallbackNs);
+          }));
+      }, readThrottler);
   }
 
   /**
@@ -190,22 +190,22 @@ public class RemoteReadableTable<K, V> implements ReadableTable<K, V> {
 
     final long startNs = System.nanoTime();
     requestManager.executeAsync(keys, () -> {
-      readFn.getAll(keys, requestManager.decorate((values, error) -> {
-        readMetrics.getAllNs.update(System.nanoTime() - startNs);
-        if (error != null) {
-          logger.error("Failed to get some records", error);
-        } else if (values == null) {
-          String errMsg = String.format("Received null records, keys=%s", keys);
-          logger.error(errMsg);
-          error = new SamzaException(errMsg);
-        } else if (values.size() < keys.size()) {
-          String errMsg = String.format("Received insufficient number of records (%d), keys=%s", values.size(), keys);
-          logger.error(errMsg);
-          error = new SamzaException(errMsg);
-        }
-        callbackHelper.invoke(callback, values, error, readMetrics.getCallbackNs);
-      }));
-    }, readThrottler);
+        readFn.getAll(keys, requestManager.decorate((values, error) -> {
+            readMetrics.getAllNs.update(System.nanoTime() - startNs);
+            if (error != null) {
+              logger.error("Failed to get some records", error);
+            } else if (values == null) {
+              String errMsg = String.format("Received null records, keys=%s", keys);
+              logger.error(errMsg);
+              error = new SamzaException(errMsg);
+            } else if (values.size() < keys.size()) {
+              String errMsg = String.format("Received insufficient number of records (%d), keys=%s", values.size(), keys);
+              logger.error(errMsg);
+              error = new SamzaException(errMsg);
+            }
+            callbackHelper.invoke(callback, values, error, readMetrics.getCallbackNs);
+          }));
+      }, readThrottler);
   }
 
   /**
