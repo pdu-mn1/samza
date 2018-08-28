@@ -142,6 +142,8 @@ public interface TableWriteFunction<K, V> extends Serializable, InitableFunction
     return CompletableFuture.allOf(Iterables.toArray(deleteFutures, CompletableFuture.class));
   }
 
+  boolean isRetriable(Throwable exception);
+
   /**
    * Flush the remote store (optional)
    */

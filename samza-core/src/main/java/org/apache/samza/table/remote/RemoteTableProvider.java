@@ -26,12 +26,15 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 
 import org.apache.samza.config.JavaTableConfig;
 import org.apache.samza.container.SamzaContainerContext;
 import org.apache.samza.table.Table;
 import org.apache.samza.table.TableProvider;
 import org.apache.samza.table.TableSpec;
+import org.apache.samza.table.retry.RetriableTableIO;
+import org.apache.samza.table.retry.TableRetryPolicy;
 import org.apache.samza.table.utils.SerdeUtils;
 import org.apache.samza.task.TaskContext;
 import org.apache.samza.util.RateLimiter;
@@ -54,6 +57,8 @@ public class RemoteTableProvider implements TableProvider {
   static final String READ_CREDIT_FN = "io.read.credit.func";
   static final String WRITE_CREDIT_FN = "io.write.credit.func";
   static final String ASYNC_CALLBACK_POOL_SIZE = "io.async.callback.pool.size";
+  static final String READ_RETRY_POLICY = "io.read.retry.policy";
+  static final String WRITE_RETRY_POLICY = "io.write.retry.policy";
 
   private final TableSpec tableSpec;
   private final boolean readOnly;
@@ -68,6 +73,7 @@ public class RemoteTableProvider implements TableProvider {
    */
   private static Map<String, ExecutorService> tableExecutors = new ConcurrentHashMap<>();
   private static Map<String, ExecutorService> callbackExecutors = new ConcurrentHashMap<>();
+  private static ScheduledExecutorService retryExecutor;
 
   public RemoteTableProvider(TableSpec tableSpec) {
     this.tableSpec = tableSpec;
@@ -91,7 +97,7 @@ public class RemoteTableProvider implements TableProvider {
     RemoteReadableTable table;
     String tableId = tableSpec.getId();
 
-    TableReadFunction<?, ?> readFn = getReadFn();
+    TableReadFunction readFn = getReadFn();
     RateLimiter rateLimiter = deserializeObject(RATE_LIMITER);
     if (rateLimiter != null) {
       rateLimiter.init(containerContext.config, taskContext);
@@ -102,11 +108,33 @@ public class RemoteTableProvider implements TableProvider {
     TableRateLimiter.CreditFunction<?, ?> writeCreditFn;
     TableRateLimiter writeRateLimiter = null;
 
+    TableRetryPolicy readRetryPolicy = deserializeObject(READ_RETRY_POLICY);
+    TableRetryPolicy writeRetryPolicy = null;
+
+    if (readRetryPolicy != null || writeRetryPolicy != null) {
+      retryExecutor = Executors.newSingleThreadScheduledExecutor(runnable -> {
+        Thread thread = new Thread(runnable);
+        thread.setName("table-retry-executor");
+        thread.setDaemon(true);
+        return thread;
+      });
+    }
+
+    if (readRetryPolicy != null) {
+      readFn = new RetriableTableIO<>(tableId + "-read", readRetryPolicy, readFn, null, retryExecutor);
+    }
+
+    TableWriteFunction writeFn = getWriteFn();
+
     boolean isRateLimited = readRateLimiter.isRateLimited();
     if (!readOnly) {
       writeCreditFn = deserializeObject(WRITE_CREDIT_FN);
       writeRateLimiter = new TableRateLimiter(tableSpec.getId(), rateLimiter, writeCreditFn, RL_WRITE_TAG);
       isRateLimited |= writeRateLimiter.isRateLimited();
+      writeRetryPolicy = deserializeObject(WRITE_RETRY_POLICY);
+      if (writeRetryPolicy != null) {
+        writeFn = new RetriableTableIO(tableId + "-write", writeRetryPolicy, null, writeFn, retryExecutor);
+      }
     }
 
     // Optional executor for future callback/completion. Shared by both read and write operations.
@@ -135,7 +163,7 @@ public class RemoteTableProvider implements TableProvider {
       table = new RemoteReadableTable(tableSpec.getId(), readFn, readRateLimiter,
           tableExecutors.get(tableId), callbackExecutors.get(tableId));
     } else {
-      table = new RemoteReadWriteTable(tableSpec.getId(), readFn, getWriteFn(), readRateLimiter,
+      table = new RemoteReadWriteTable(tableSpec.getId(), readFn, writeFn, readRateLimiter,
           writeRateLimiter, tableExecutors.get(tableId), callbackExecutors.get(tableId));
     }
 

@@ -100,5 +100,7 @@ public interface TableReadFunction<K, V> extends Serializable, InitableFunction,
             .collect(Collectors.toMap(e -> e.getKey(), e -> e.getValue().join())));
   }
 
+  boolean isRetriable(Throwable exception);
+
   // optionally implement readObject() to initialize transient states
 }

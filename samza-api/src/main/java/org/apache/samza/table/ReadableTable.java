@@ -58,6 +58,10 @@ public interface ReadableTable<K, V> extends Table<KV<K, V>> {
   /**
    * Asynchronously gets the value associated with the specified {@code key}.
    *
+   * Any callbacks associated with the returned CompletableFuture will be executed by the threads
+   * of the native table client. As such, please use a separate executor for long running
+   * operations inside the callback.
+   *
    * @param key the key with which the associated value is to be fetched.
    * @return completableFuture for the requested value
    * @throws NullPointerException if the specified {@code key} is {@code null}.
@@ -75,6 +79,10 @@ public interface ReadableTable<K, V> extends Table<KV<K, V>> {
 
   /**
    * Asynchronously gets the values with which the specified {@code keys} are associated.
+   *
+   * Any callbacks associated with the returned CompletableFuture will be executed by the threads
+   * of the native table client. As such, please use a separate executor for long running
+   * operations inside the callback.
    *
    * @param keys the keys with which the associated values are to be fetched.
    * @return completableFuture for the requested entries
